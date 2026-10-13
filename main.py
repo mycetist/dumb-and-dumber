@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 import pyray as pr
 from abc import ABC, abstractmethod
 
-pr.init_window(800, 600, "demo")
+pr.init_window(1500, 1000, "demo")
 pr.set_target_fps(60)
 
 class Entity(ABC):
@@ -62,38 +64,42 @@ class Player(Entity):
         self.x_speed: float = 0
 
         self.grounded: bool = False
+        self.carried: bool = False
 
-    def update(self, dt: float, level: Level):
-        key_left = pr.is_key_down(pr.KeyboardKey.KEY_A) or pr.is_key_down(pr.KeyboardKey.KEY_LEFT)
-        key_right = pr.is_key_down(pr.KeyboardKey.KEY_D) or pr.is_key_down(pr.KeyboardKey.KEY_RIGHT)
-        key_up = pr.is_key_pressed(pr.KeyboardKey.KEY_W) or pr.is_key_pressed(pr.KeyboardKey.KEY_UP) or pr.is_key_pressed(pr.KeyboardKey.KEY_SPACE)
+        self.partner: Player = None
 
-        def _overlap(obj: Block, x: float, y: float):
-            return x < obj.x + obj.w and x + self.w > obj.x and \
-                y < obj.y + obj.h and y + self.h > obj.y
-        
-        if key_right and not key_left:
-            self.x_speed = self.walk_speed * dt
-        elif key_left and not key_right:
-            self.x_speed = -self.walk_speed * dt
-        else:
-            self.x_speed = 0
+    def set_partner(self, partner: Player):
+        self.partner = partner
 
-        if key_up and self.grounded:
-            self.y_speed = -self.jump_strength * dt
-        
+    def update(self):
+        pass
+
+    def _overlap_x(self, obj: Entity, x: float):
+        return x < obj.x + obj.w and x + self.w > obj.x
+    
+    def _overlap_y(self, obj: Entity, y: float):
+        return y < obj.y + obj.h and y + self.h > obj.y
+    
+    def _overlap(self, obj: Entity, x: float, y: float):
+        return self._overlap_x(obj, x) and self._overlap_y(obj, y)
+
+    
+
+    def travel(self, level: Level, delta_x: float, delta_y: float):
+        x_new = self.x + delta_x
+        y_new = self.y + delta_y
+
         overlapped_objs: list[Block]
-        
-        x_new = self.x + self.x_speed
-        overlapped_objs = [obj for obj in level.layout if _overlap(obj, x_new, self.y)]
+        overlapped_objs = [obj for obj in level.layout if self._overlap(obj, x_new, self.y)]
         for obj in overlapped_objs:
-            if x_new < obj.x < x_new + self.w > obj.x: x_new = min(x_new, obj.x - self.w)
-            if x_new < obj.x + obj.w < x_new + self.w: x_new = max(x_new, obj.x + obj.w)
+            if x_new < obj.x < x_new + self.w > obj.x:
+                x_new = min(x_new, obj.x - self.w)
+            if x_new < obj.x + obj.w < x_new + self.w:
+                x_new = max(x_new, obj.x + obj.w)
+        travel_x = x_new - self.x
         self.x = x_new
-
-        self.y_speed += self.gravity * dt
-        y_new = self.y + self.y_speed
-        overlapped_objs = [obj for obj in level.layout if _overlap(obj, self.x, y_new)]
+        
+        overlapped_objs = [obj for obj in level.layout if self._overlap(obj, self.x, y_new)]
         self.grounded = False
         for obj in overlapped_objs:
             if y_new < obj.y < y_new + self.h:
@@ -103,18 +109,84 @@ class Player(Entity):
             if y_new < obj.y + obj.h < y_new + self.h:
                 self.y_speed = 0
                 y_new = max(y_new, obj.y + obj.h)
-        self.y = y_new
+
+        if self.partner and self._overlap_x(self.partner, self.x) and self.y + self.h <= self.partner.y and y_new + self.h >= self.partner.y:
+            self.carried = True
+            self.y_speed = 0
+            y_new = min(y_new, self.partner.y - self.h)
+            self.grounded = True
+        else:
+            self.carried = False
+
         
+        travel_y = y_new - self.y
+        self.y = y_new
+        return travel_x, travel_y
+
+
+
+    def _move(self, dt: float, level: Level, keys: dict[str, bool], partner: Player = None):
+        if keys['right'] and not keys['left']:
+            self.x_speed = self.walk_speed * dt
+        elif keys['left'] and not keys['right']:
+            self.x_speed = -self.walk_speed * dt
+        else:
+            self.x_speed = 0
+
+        if keys['up'] and self.grounded:
+            self.y_speed = -self.jump_strength * dt
+        self.y_speed += self.gravity * dt
+    
+        return self.travel(level, self.x_speed, self.y_speed)
+        
+    def draw(self):
+        # default: draw rectangle
+        pr.draw_rectangle(int(self.x), int(self.y), int(self.w), int(self.h), pr.RED)
+
+
+class User(Player):
+    def __init__(self):
+        super().__init__()
+
+    def update(self, dt: float, level: Level, partner: Player):
+        # key_left = pr.is_key_down(pr.KeyboardKey.KEY_A) or pr.is_key_down(pr.KeyboardKey.KEY_LEFT)
+        # key_right = pr.is_key_down(pr.KeyboardKey.KEY_D) or pr.is_key_down(pr.KeyboardKey.KEY_RIGHT)
+        # key_up = pr.is_key_pressed(pr.KeyboardKey.KEY_W) or pr.is_key_pressed(pr.KeyboardKey.KEY_UP) or pr.is_key_pressed(pr.KeyboardKey.KEY_SPACE)
+        key_left = pr.is_key_down(pr.KeyboardKey.KEY_A)
+        key_right = pr.is_key_down(pr.KeyboardKey.KEY_D)
+        key_up = pr.is_key_pressed(pr.KeyboardKey.KEY_W)
+        keys = {'right': key_right, 'left': key_left, 'up': key_up}
+
+        return self._move(dt, level, keys, partner)
+
     def draw(self):
         pr.draw_rectangle(int(self.x), int(self.y), int(self.w), int(self.h), pr.RED)
 
 
+class Bot(Player):
+    def __init__(self):
+        super().__init__()
+
+    def update(self, dt: float, level: Level, partner: Player):
+        key_left = pr.is_key_down(pr.KeyboardKey.KEY_LEFT)
+        key_right = pr.is_key_down(pr.KeyboardKey.KEY_RIGHT)
+        key_up = pr.is_key_pressed(pr.KeyboardKey.KEY_UP)
+        keys = {'right': key_right, 'left': key_left, 'up': key_up}
+        return self._move(dt, level, keys, partner)
+
+    def draw(self):
+        pr.draw_rectangle(int(self.x), int(self.y), int(self.w), int(self.h), pr.BLUE)
 
 
 level = Level(level_map)
-player = Player()
+
+user = User()
+bot = Bot()
+user.set_partner(bot)
+bot.set_partner(user)
+
 cam = pr.Camera2D()
-cam.target = pr.Vector2(player.x, player.y)
+cam.target = pr.Vector2(user.x, user.y)
 cam.offset = pr.Vector2(800 / 2, 600 / 2)
 cam.zoom = 0.5
 
@@ -124,13 +196,20 @@ while not pr.window_should_close():
     pr.begin_drawing()
     pr.clear_background(pr.RAYWHITE)
 
-    player.update(dt, level)
+    user_x, user_y = user.update(dt, level, bot)
+    bot_x, bot_y = bot.update(dt, level, user)
 
-    cam.target = pr.Vector2(player.x, player.y)
+    if bot.carried:
+        bot.travel(level, user_x, user_y)
+    elif user.carried:
+        user.travel(level, bot_x, bot_y)
+
+    cam.target = pr.Vector2(user.x, user.y)
 
     pr.begin_mode_2d(cam)
     level.draw()
-    player.draw()
+    user.draw()
+    bot.draw()
     pr.end_mode_2d()
 
     pr.draw_fps(10, 10)
