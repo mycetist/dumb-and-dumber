@@ -85,7 +85,7 @@ class Player(Entity):
 
     
 
-    def travel(self, level: Level, delta_x: float, delta_y: float):
+    def travel(self, level: Level, delta_x: float, delta_y: float, pushed: bool = False):
         x_new = self.x + delta_x
         y_new = self.y + delta_y
 
@@ -100,7 +100,8 @@ class Player(Entity):
         self.x = x_new
         
         overlapped_objs = [obj for obj in level.layout if self._overlap(obj, self.x, y_new)]
-        self.grounded = False
+        if not pushed:
+            self.grounded = False
         for obj in overlapped_objs:
             if y_new < obj.y < y_new + self.h:
                 self.y_speed = 0
@@ -110,13 +111,14 @@ class Player(Entity):
                 self.y_speed = 0
                 y_new = max(y_new, obj.y + obj.h)
 
-        if self.partner and self._overlap_x(self.partner, self.x) and self.y + self.h <= self.partner.y and y_new + self.h >= self.partner.y:
-            self.carried = True
-            self.y_speed = 0
-            y_new = min(y_new, self.partner.y - self.h)
-            self.grounded = True
-        else:
-            self.carried = False
+        if not pushed:
+            if self.partner and self._overlap_x(self.partner, self.x) and self.y + self.h - 1 <= self.partner.y and y_new + self.h >= self.partner.y:
+                self.carried = True
+                self.y_speed = 0
+                y_new = min(y_new, self.partner.y - self.h)
+                self.grounded = True
+            else:
+                self.carried = False
 
         
         travel_y = y_new - self.y
@@ -125,7 +127,7 @@ class Player(Entity):
 
 
 
-    def _move(self, dt: float, level: Level, keys: dict[str, bool], partner: Player = None):
+    def _move(self, dt: float, level: Level, keys: dict[str, bool]):
         if keys['right'] and not keys['left']:
             self.x_speed = self.walk_speed * dt
         elif keys['left'] and not keys['right']:
@@ -148,7 +150,7 @@ class User(Player):
     def __init__(self):
         super().__init__()
 
-    def update(self, dt: float, level: Level, partner: Player):
+    def update(self, dt: float, level: Level):
         # key_left = pr.is_key_down(pr.KeyboardKey.KEY_A) or pr.is_key_down(pr.KeyboardKey.KEY_LEFT)
         # key_right = pr.is_key_down(pr.KeyboardKey.KEY_D) or pr.is_key_down(pr.KeyboardKey.KEY_RIGHT)
         # key_up = pr.is_key_pressed(pr.KeyboardKey.KEY_W) or pr.is_key_pressed(pr.KeyboardKey.KEY_UP) or pr.is_key_pressed(pr.KeyboardKey.KEY_SPACE)
@@ -157,7 +159,7 @@ class User(Player):
         key_up = pr.is_key_pressed(pr.KeyboardKey.KEY_W)
         keys = {'right': key_right, 'left': key_left, 'up': key_up}
 
-        return self._move(dt, level, keys, partner)
+        return self._move(dt, level, keys)
 
     def draw(self):
         pr.draw_rectangle(int(self.x), int(self.y), int(self.w), int(self.h), pr.RED)
@@ -167,12 +169,12 @@ class Bot(Player):
     def __init__(self):
         super().__init__()
 
-    def update(self, dt: float, level: Level, partner: Player):
+    def update(self, dt: float, level: Level):
         key_left = pr.is_key_down(pr.KeyboardKey.KEY_LEFT)
         key_right = pr.is_key_down(pr.KeyboardKey.KEY_RIGHT)
         key_up = pr.is_key_pressed(pr.KeyboardKey.KEY_UP)
         keys = {'right': key_right, 'left': key_left, 'up': key_up}
-        return self._move(dt, level, keys, partner)
+        return self._move(dt, level, keys)
 
     def draw(self):
         pr.draw_rectangle(int(self.x), int(self.y), int(self.w), int(self.h), pr.BLUE)
@@ -190,19 +192,30 @@ cam.target = pr.Vector2(user.x, user.y)
 cam.offset = pr.Vector2(800 / 2, 600 / 2)
 cam.zoom = 0.5
 
+last_carried = None
+
 while not pr.window_should_close():
     dt = pr.get_frame_time()
 
     pr.begin_drawing()
-    pr.clear_background(pr.RAYWHITE)
+    pr.clear_background(pr.Color(220, 230, 255))
 
-    user_x, user_y = user.update(dt, level, bot)
-    bot_x, bot_y = bot.update(dt, level, user)
+    if last_carried == 'bot':
+        bot_x, bot_y = bot.update(dt, level)
+        user_x, user_y = user.update(dt, level)
+    else:
+        user_x, user_y = user.update(dt, level)
+        bot_x, bot_y = bot.update(dt, level)
 
-    if bot.carried:
-        bot.travel(level, user_x, user_y)
-    elif user.carried:
-        user.travel(level, bot_x, bot_y)
+    if (last_carried == 'bot' and bot.carried):
+        bot.travel(level, user_x, user_y, True)
+    elif (last_carried == 'user' and user.carried):
+        user.travel(level, bot_x, bot_y, True)
+        
+
+    if bot.carried: last_carried = 'bot'
+    elif user.carried: last_carried = 'user'
+    else: last_carried = None
 
     cam.target = pr.Vector2(user.x, user.y)
 
