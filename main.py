@@ -6,6 +6,9 @@ from abc import ABC, abstractmethod
 pr.init_window(1500, 1000, "demo")
 pr.set_target_fps(60)
 
+player_texture = pr.load_texture("textures/player.png")
+bot_texture = pr.load_texture("textures/bot.png")
+
 class Entity(ABC):
     @abstractmethod
     def draw(self):
@@ -34,6 +37,7 @@ level_map = [
     (500, 400, 500, 200),
     (1100, 500, 600, 100),
     (1300, 600, 600, 100),
+    (-500, 800, 3000, 20),
 ]
 
 class Level(Entity):
@@ -54,7 +58,7 @@ class Player(Entity):
     def __init__(self):
         self.x: float = 50
         self.y: float = 50
-        self.w: float = 50
+        self.w: float = 100
         self.h: float = 100
 
         self.gravity: float = 36
@@ -162,7 +166,14 @@ class User(Player):
         return self._move(dt, level, keys)
 
     def draw(self):
-        pr.draw_rectangle(int(self.x), int(self.y), int(self.w), int(self.h), pr.RED)
+        pr.draw_texture_pro(
+            player_texture,
+            pr.Rectangle(0, 0, player_texture.width, player_texture.height),
+            pr.Rectangle(int(self.x), int(self.y), int(self.w), int(self.h)),
+            pr.Vector2(0, 0),
+            0,
+            pr.RAYWHITE
+        )
 
 
 class Bot(Player):
@@ -177,7 +188,14 @@ class Bot(Player):
         return self._move(dt, level, keys)
 
     def draw(self):
-        pr.draw_rectangle(int(self.x), int(self.y), int(self.w), int(self.h), pr.BLUE)
+        pr.draw_texture_pro(
+            bot_texture,
+            pr.Rectangle(0, 0, player_texture.width, player_texture.height),
+            pr.Rectangle(int(self.x), int(self.y), int(self.w), int(self.h)),
+            pr.Vector2(0, 0),
+            0,
+            pr.RAYWHITE
+        )
 
 
 level = Level(level_map)
@@ -192,30 +210,25 @@ cam.target = pr.Vector2(user.x, user.y)
 cam.offset = pr.Vector2(800 / 2, 600 / 2)
 cam.zoom = 0.5
 
-last_carried = None
-
 while not pr.window_should_close():
     dt = pr.get_frame_time()
 
     pr.begin_drawing()
-    pr.clear_background(pr.Color(220, 230, 255))
+    pr.clear_background(pr.Color(50, 60, 120))
 
-    if last_carried == 'bot':
+    carried = 'bot' if bot.carried else 'user' if user.carried else None
+
+    if carried == 'bot':
         bot_x, bot_y = bot.update(dt, level)
         user_x, user_y = user.update(dt, level)
     else:
         user_x, user_y = user.update(dt, level)
         bot_x, bot_y = bot.update(dt, level)
 
-    if (last_carried == 'bot' and bot.carried):
+    if carried == 'bot' and bot.carried:
         bot.travel(level, user_x, user_y, True)
-    elif (last_carried == 'user' and user.carried):
+    elif carried == 'user' and user.carried:
         user.travel(level, bot_x, bot_y, True)
-        
-
-    if bot.carried: last_carried = 'bot'
-    elif user.carried: last_carried = 'user'
-    else: last_carried = None
 
     cam.target = pr.Vector2(user.x, user.y)
 
