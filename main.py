@@ -2,12 +2,33 @@ from __future__ import annotations
 
 import pyray as pr
 from abc import ABC, abstractmethod
+import json
+import os
 
 pr.init_window(1500, 1000, "demo")
 pr.set_target_fps(60)
 
-player_texture = pr.load_texture("textures/player.png")
+player_still = pr.load_texture("textures/player/still.png")
+player_run1 = pr.load_texture("textures/player/run1.png")
+player_run2 = pr.load_texture("textures/player/run2.png")
+player_jump = pr.load_texture("textures/player/jump.png")
+bot_still = pr.load_texture("textures/bot/still.png")
+bot_run1 = pr.load_texture("textures/bot/run1.png")
+bot_run2 = pr.load_texture("textures/bot/run2.png")
+bot_jump = pr.load_texture("textures/bot/jump.png")
 bot_texture = pr.load_texture("textures/bot.png")
+block_texture = pr.load_texture("textures/block.png")
+finish_texture = pr.load_texture("textures/fin.png")
+
+def fast_render(texture: pr.Texture, x: int, y: int, w: int, h: int):
+    pr.draw_texture_pro(
+        texture,
+        pr.Rectangle(0, 0, texture.width, texture.height),
+        pr.Rectangle(x, y, w, h),
+        pr.Vector2(0, 0),
+        0,
+        pr.RAYWHITE
+    )
 
 class Entity(ABC):
     @abstractmethod
@@ -20,34 +41,38 @@ class Entity(ABC):
     
 
 class Block(Entity):
-    def __init__(self, x: int, y: int, w: int, h: int):
+    def __init__(self, x: int, y: int, w: int, h: int, flags: list[str] = None):
         self.x = x
         self.y = y
         self.w = w
         self.h = h
+        self.flags = flags
 
     def update(self, dt: float):
         pass
 
     def draw(self):
-        pr.draw_rectangle(self.x, self.y, self.w, self.h, pr.GREEN)
-
-level_map = [
-    (0, 300, 200, 200),
-    (500, 400, 500, 200),
-    (1100, 500, 600, 100),
-    (1300, 600, 600, 100),
-    (-500, 800, 3000, 20),
-]
+        texture = finish_texture if "finish" in self.flags else block_texture
+        fast_render(texture, self.x, self.y, self.w, self.h)
 
 class Level(Entity):
-    def __init__(self, level_map: list[tuple[int, int]]):
+    def __init__(self):
         self.layout: list[Block] = []
-        for pos in level_map:
-            self.layout.append(Block(*pos))
 
     def update(self, dt: float):
         pass
+
+    def load(self, id: int):
+        self.layout = []
+
+        with open(f"levels/{id}.json") as f:
+            level_data = json.load(f)
+        
+        for pos in level_data['map']:
+            x, y, w, h, *flags = pos
+            self.layout.append(Block(x, y, w, h, flags))
+
+        return level_data
 
     def draw(self):
         for obj in self.layout:
@@ -61,14 +86,21 @@ class Player(Entity):
         self.w: float = 100
         self.h: float = 100
 
+        self.animation_dt: float = 0
+        self.animation_duration: float = 0.15
+        self.animation_frame = 0
+
         self.gravity: float = 36
         self.jump_strength: float = 1000
         self.walk_speed: float = 600
+
         self.y_speed: float = 0
         self.x_speed: float = 0
 
         self.grounded: bool = False
         self.carried: bool = False
+
+        self.finish: bool = False
 
         self.partner: Player = None
 
@@ -87,7 +119,15 @@ class Player(Entity):
     def _overlap(self, obj: Entity, x: float, y: float):
         return self._overlap_x(obj, x) and self._overlap_y(obj, y)
 
-    
+    def respawn(self, x: int, y: int):
+        self.x = x
+        self.y = y
+
+        self.x_speed = 0
+        self.y_speed = 0
+        self.grounded = False
+        self.carried = False
+        self.finish = False
 
     def travel(self, level: Level, delta_x: float, delta_y: float, pushed: bool = False):
         x_new = self.x + delta_x
@@ -100,6 +140,8 @@ class Player(Entity):
                 x_new = min(x_new, obj.x - self.w)
             if x_new < obj.x + obj.w < x_new + self.w:
                 x_new = max(x_new, obj.x + obj.w)
+            if 'finish' in obj.flags:
+                self.finish = True
         travel_x = x_new - self.x
         self.x = x_new
         
@@ -114,6 +156,8 @@ class Player(Entity):
             if y_new < obj.y + obj.h < y_new + self.h:
                 self.y_speed = 0
                 y_new = max(y_new, obj.y + obj.h)
+            if 'finish' in obj.flags:
+                self.finish = True
 
         if not pushed:
             if self.partner and self._overlap_x(self.partner, self.x) and self.y + self.h - 1 <= self.partner.y and y_new + self.h >= self.partner.y:
@@ -144,6 +188,17 @@ class Player(Entity):
         self.y_speed += self.gravity * dt
     
         return self.travel(level, self.x_speed, self.y_speed)
+
+    def _animate(self, dt: float):
+        if self.x_speed == 0:
+            self.animation_dt = 0
+        else:
+            self.animation_dt += dt
+            if self.animation_dt >= self.animation_duration:
+                self.animation_dt = 0
+                self.animation_frame += 1
+                self.animation_frame %= 2
+
         
     def draw(self):
         # default: draw rectangle
@@ -162,18 +217,19 @@ class User(Player):
         key_right = pr.is_key_down(pr.KeyboardKey.KEY_D)
         key_up = pr.is_key_pressed(pr.KeyboardKey.KEY_W)
         keys = {'right': key_right, 'left': key_left, 'up': key_up}
-
+        self._animate(dt)
         return self._move(dt, level, keys)
 
     def draw(self):
-        pr.draw_texture_pro(
-            player_texture,
-            pr.Rectangle(0, 0, player_texture.width, player_texture.height),
-            pr.Rectangle(int(self.x), int(self.y), int(self.w), int(self.h)),
-            pr.Vector2(0, 0),
-            0,
-            pr.RAYWHITE
-        )
+        if not self.grounded:
+            fast_render(player_jump, self.x, self.y, self.w, self.h)
+        elif self.x_speed != 0:
+            if self.animation_frame == 0:
+                fast_render(player_run1, self.x, self.y, self.w, self.h)
+            else:
+                fast_render(player_run2, self.x, self.y, self.w, self.h)
+        else:
+            fast_render(player_still, self.x, self.y, self.w, self.h)
 
 
 class Bot(Player):
@@ -185,39 +241,41 @@ class Bot(Player):
         key_right = pr.is_key_down(pr.KeyboardKey.KEY_RIGHT)
         key_up = pr.is_key_pressed(pr.KeyboardKey.KEY_UP)
         keys = {'right': key_right, 'left': key_left, 'up': key_up}
+        self._animate(dt)
         return self._move(dt, level, keys)
 
     def draw(self):
-        pr.draw_texture_pro(
-            bot_texture,
-            pr.Rectangle(0, 0, player_texture.width, player_texture.height),
-            pr.Rectangle(int(self.x), int(self.y), int(self.w), int(self.h)),
-            pr.Vector2(0, 0),
-            0,
-            pr.RAYWHITE
-        )
+        if not self.grounded:
+            fast_render(bot_jump, self.x, self.y, self.w, self.h)
+        elif self.x_speed != 0:
+            if self.animation_frame == 0:
+                fast_render(bot_run1, self.x, self.y, self.w, self.h)
+            else:
+                fast_render(bot_run2, self.x, self.y, self.w, self.h)
+        else:
+            fast_render(bot_still, self.x, self.y, self.w, self.h)
+        
 
 
-level = Level(level_map)
+level = Level()
+level_id = 1
+level_data = level.load(level_id)
 
 user = User()
 bot = Bot()
 user.set_partner(bot)
 bot.set_partner(user)
+user.respawn(*level_data['spawn']['user'])
+bot.respawn(*level_data['spawn']['bot'])
 
 cam = pr.Camera2D()
 cam.target = pr.Vector2(user.x, user.y)
 cam.offset = pr.Vector2(800 / 2, 600 / 2)
 cam.zoom = 0.5
 
-while not pr.window_should_close():
-    dt = pr.get_frame_time()
-
-    pr.begin_drawing()
-    pr.clear_background(pr.Color(50, 60, 120))
-
+def update_characters():
     carried = 'bot' if bot.carried else 'user' if user.carried else None
-
+    
     if carried == 'bot':
         bot_x, bot_y = bot.update(dt, level)
         user_x, user_y = user.update(dt, level)
@@ -229,6 +287,26 @@ while not pr.window_should_close():
         bot.travel(level, user_x, user_y, True)
     elif carried == 'user' and user.carried:
         user.travel(level, bot_x, bot_y, True)
+    
+
+while not pr.window_should_close():
+    dt = pr.get_frame_time()
+
+    pr.begin_drawing()
+    pr.clear_background(pr.RAYWHITE)
+
+    if user.finish or bot.finish:
+        if level_id >= len(os.listdir("levels")):
+            level_id = 1
+        else:
+            level_id += 1
+        level_data = level.load(level_id)
+        user.respawn(*level_data['spawn']['user'])
+        bot.respawn(*level_data['spawn']['bot'])
+        
+    pr.clear_background(pr.Color(120, 60, 80))
+
+    update_characters()
 
     cam.target = pr.Vector2(user.x, user.y)
 
@@ -239,6 +317,7 @@ while not pr.window_should_close():
     pr.end_mode_2d()
 
     pr.draw_fps(10, 10)
+    
     pr.end_drawing()
 
 pr.close_window()
