@@ -3,6 +3,10 @@ from __future__ import annotations
 import pyray as pr
 from abc import ABC, abstractmethod
 import json
+
+import random
+random.seed(0)
+
 import os
 
 pr.init_window(1500, 1000, "demo")
@@ -17,8 +21,13 @@ bot_run1 = pr.load_texture("textures/bot/run1.png")
 bot_run2 = pr.load_texture("textures/bot/run2.png")
 bot_jump = pr.load_texture("textures/bot/jump.png")
 bot_texture = pr.load_texture("textures/bot.png")
+
 block_texture = pr.load_texture("textures/block.png")
 finish_texture = pr.load_texture("textures/fin.png")
+grass_texture = pr.load_texture("textures/grass.png")
+bg_texture = pr.load_texture("textures/bg.png")
+
+sign_restart = pr.load_texture("textures/signs/restart.png")
 
 def fast_render(texture: pr.Texture, x: int, y: int, w: int, h: int):
     pr.draw_texture_pro(
@@ -40,6 +49,9 @@ class Entity(ABC):
         ...
     
 
+grass_edge = 15
+grass_height = 2
+
 class Block(Entity):
     def __init__(self, x: int, y: int, w: int, h: int, flags: list[str] = None):
         self.x = x
@@ -48,12 +60,38 @@ class Block(Entity):
         self.h = h
         self.flags = flags
 
+        if not "nograss" in self.flags:
+            self.grass_w = (self.w + grass_edge * 2) // 3
+            if grass_texture.width <= self.grass_w:
+                # cap grass width to texture size
+                self.grass_w = grass_texture.width
+                self.grass_x = 0
+            else:
+                self.grass_x = random.randint(0, grass_texture.width - self.grass_w)
+            
+
     def update(self, dt: float):
         pass
 
     def draw(self):
-        texture = finish_texture if "finish" in self.flags else block_texture
-        fast_render(texture, self.x, self.y, self.w, self.h)
+        if "finish" in self.flags:
+            fast_render(finish_texture, self.x, self.y, self.w, self.h)
+            return
+        elif "signrestart" in self.flags:
+            fast_render(sign_restart, self.x, self.y, self.w, self.h)
+            return
+        
+        fast_render(block_texture, self.x, self.y, self.w, self.h)
+        if not "nograss" in self.flags:
+            pr.draw_texture_pro(
+                grass_texture,
+                pr.Rectangle(self.grass_x, 0, self.grass_w, grass_texture.height),
+                pr.Rectangle(self.x - grass_edge, self.y - grass_height, self.w + 2 * grass_edge, self.h // 1.6),
+                pr.Vector2(0, 0),
+                0,
+                pr.RAYWHITE
+            )
+
 
 class Level(Entity):
     def __init__(self):
@@ -136,12 +174,14 @@ class Player(Entity):
         overlapped_objs: list[Block]
         overlapped_objs = [obj for obj in level.layout if self._overlap(obj, x_new, self.y)]
         for obj in overlapped_objs:
+            if 'finish' in obj.flags:
+                self.finish = True
+            elif 'notouch' in obj.flags:
+                continue
             if x_new < obj.x < x_new + self.w > obj.x:
                 x_new = min(x_new, obj.x - self.w)
             if x_new < obj.x + obj.w < x_new + self.w:
                 x_new = max(x_new, obj.x + obj.w)
-            if 'finish' in obj.flags:
-                self.finish = True
         travel_x = x_new - self.x
         self.x = x_new
         
@@ -149,6 +189,10 @@ class Player(Entity):
         if not pushed:
             self.grounded = False
         for obj in overlapped_objs:
+            if 'finish' in obj.flags:
+                self.finish = True
+            elif 'notouch' in obj.flags:
+                continue
             if y_new < obj.y < y_new + self.h:
                 self.y_speed = 0
                 y_new = min(y_new, obj.y - self.h)
@@ -156,8 +200,7 @@ class Player(Entity):
             if y_new < obj.y + obj.h < y_new + self.h:
                 self.y_speed = 0
                 y_new = max(y_new, obj.y + obj.h)
-            if 'finish' in obj.flags:
-                self.finish = True
+            
 
         if not pushed:
             if self.partner and self._overlap_x(self.partner, self.x) and self.y + self.h - 1 <= self.partner.y and y_new + self.h >= self.partner.y:
@@ -254,7 +297,77 @@ class Bot(Player):
                 fast_render(bot_run2, self.x, self.y, self.w, self.h)
         else:
             fast_render(bot_still, self.x, self.y, self.w, self.h)
+
+def sign(x):
+    return (x > 0) - (x < 0)
+
+class Rope:
+    def __init__(self):
+        self.active = False
+
+        self.dur_alpha = 0
+        self.dur = 2
+
+        self.cooldown = 0.3
+        self.cooldown_alpha: float = 0
+
+        self.travel_x = 1
+        self.travel_y = 1
+
+    def reset(self):
+        self.active = False
+        self.cooldown_alpha = 0
+        self.dur_alpha = 0
+        self.travel_x = 1
+        self.travel_y = 1
+
+    def use(self):
+        if self.cooldown_alpha < self.cooldown:
+            # sfx here????
+            return
+        self.reset()
+        self.active = True
+
+
+    def update(self, dt: float):
+        if self.active:
+            self.dur_alpha += dt
+            if self.dur_alpha >= self.dur:
+                self.reset()
+                return
+
+            delta_x = user.x - bot.x
+            delta_y = user.y - bot.y
+            dist = (delta_x**2 + delta_y**2)**0.5
+
+            if dist < 5 or (self.travel_x == 0 and self.travel_y == 0):
+                self.reset()
+                return
+
+            if dist > 0:
+                step = min(800 * dt, dist)
+                move_x = delta_x / dist * step
+                move_y = delta_y / dist * step
+
+                if self.travel_x == 0 and move_y != 0:
+                    remaining_y = user.y - bot.y
+                    move_y = sign(remaining_y) * min(abs(remaining_y), step / 1.5)
+                if self.travel_y == 0 and move_x != 0:
+                    remaining_x = user.x - bot.x
+                    move_x = sign(remaining_x) * min(abs(remaining_x), step / 1.5)
+
+                self.travel_x, self.travel_y = bot.travel(level, move_x, move_y, True)
+
+        else:
+            self.cooldown_alpha += dt
         
+
+    def draw(self):
+        pr.draw_line_ex(
+            pr.Vector2(user.x + user.w // 2, user.y + user.h // 2),
+            pr.Vector2(bot.x + bot.w // 2, bot.y + bot.h // 2),
+            10, pr.Color(255, 255, 255, 100)
+        )
 
 
 level = Level()
@@ -263,15 +376,16 @@ level_data = level.load(level_id)
 
 user = User()
 bot = Bot()
+rope = Rope()
+rope.cooldown_alpha = rope.cooldown
 user.set_partner(bot)
 bot.set_partner(user)
 user.respawn(*level_data['spawn']['user'])
 bot.respawn(*level_data['spawn']['bot'])
 
 cam = pr.Camera2D()
-cam.target = pr.Vector2(user.x, user.y)
-cam.offset = pr.Vector2(800 / 2, 600 / 2)
-cam.zoom = 0.5
+
+
 
 def update_characters():
     carried = 'bot' if bot.carried else 'user' if user.carried else None
@@ -287,6 +401,29 @@ def update_characters():
         bot.travel(level, user_x, user_y, True)
     elif carried == 'user' and user.carried:
         user.travel(level, bot_x, bot_y, True)
+
+def update_camera(dt: float):
+    mid_x = (user.x + user.w / 2 + bot.x + bot.w / 2) / 2
+    mid_y = (user.y + user.h / 2 + bot.y + bot.h / 2) / 2
+
+    padding = 1000
+    cam_w = abs(user.x - bot.x) + user.w + padding
+    cam_h = abs(user.y - bot.y) + user.h + padding
+
+    zoom = min(pr.get_screen_width() / cam_w, pr.get_screen_height() / cam_h)
+    zoom = max(0.15, min(1, zoom))
+
+    t = 1 - 0.01 ** dt
+    cam.target.x += (mid_x - cam.target.x) * t
+    cam.target.y += (mid_y - cam.target.y) * t
+    cam.zoom += (zoom - cam.zoom) * t
+
+def reset_camera():
+    cam.target = pr.Vector2((user.x + bot.x) / 2, (user.y + bot.y) / 2)
+    cam.offset = pr.Vector2(pr.get_screen_width() / 2, pr.get_screen_height() / 2)
+    cam.zoom = 0.5
+
+reset_camera()
     
 
 while not pr.window_should_close():
@@ -303,17 +440,32 @@ while not pr.window_should_close():
         level_data = level.load(level_id)
         user.respawn(*level_data['spawn']['user'])
         bot.respawn(*level_data['spawn']['bot'])
-        
-    pr.clear_background(pr.Color(120, 60, 80))
+        rope.reset()
+        rope.cooldown_alpha = rope.cooldown
+    elif pr.is_key_pressed(pr.KeyboardKey.KEY_R):
+        level_data = level.load(level_id)
+        user.respawn(*level_data['spawn']['user'])
+        bot.respawn(*level_data['spawn']['bot'])
+        rope.reset()
+        rope.cooldown_alpha = rope.cooldown
+        reset_camera()
+    elif pr.is_key_pressed(pr.KeyboardKey.KEY_Q) and user.grounded:
+        rope.use()
+    
+    fast_render(bg_texture, 0, 0, pr.get_screen_width(), pr.get_screen_height())
 
-    update_characters()
+    if not rope.active:
+        update_characters()
+    rope.update(dt)
 
-    cam.target = pr.Vector2(user.x, user.y)
+    update_camera(dt)
 
     pr.begin_mode_2d(cam)
-    level.draw()
+    if rope.active:
+        rope.draw()
     user.draw()
     bot.draw()
+    level.draw()
     pr.end_mode_2d()
 
     pr.draw_fps(10, 10)
