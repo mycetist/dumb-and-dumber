@@ -2,16 +2,68 @@ from __future__ import annotations
 
 import pyray as pr
 from abc import ABC, abstractmethod
+from enum import Enum
 import json
+import os
 
 import random
 random.seed(0)
 
-import os
 
 pr.set_config_flags(pr.ConfigFlags.FLAG_WINDOW_RESIZABLE)
 pr.init_window(1500, 1000, "demo")
 pr.set_target_fps(60)
+
+pr.init_audio_device()
+
+death_sfx = pr.load_sound("sfx/vine-boom.mp3")
+
+blood_texture = pr.load_texture("textures/blood.png")
+blood_frames = 10
+blood_w = blood_texture.width / blood_frames
+blood_h = blood_texture.height
+blood_frame_time = 0.05
+
+class Explosion:
+    def __init__(self, x, y, w, h):
+        self.x = x
+        self.y = y
+        self.w = w
+        self.h = h
+        self.timer = 0.0
+        self.frame = 0
+        self.done = True
+
+    def start(self, cx, cy):
+        self.x = cx - self.w / 2
+        self.y = cy - self.w / 2
+        self.timer = 0
+        self.frame = 0
+        self.done = False
+
+    def update(self, dt: float):
+        if self.done:
+            return
+        self.timer += dt
+        while self.timer >= blood_frame_time:
+            self.timer -= blood_frame_time
+            self.frame += 1
+            if self.frame >= blood_frames:
+                self.done = True
+                break
+
+    def draw(self):
+        if self.done:
+            return
+        pr.draw_texture_pro(
+            blood_texture,
+            pr.Rectangle(self.frame * blood_w, 0, blood_w, blood_h),
+            pr.Rectangle(self.x, self.y, self.w, self.h),
+            pr.Vector2(0, 0),
+            0,
+            pr.RAYWHITE    
+        )
+
 
 player_still = pr.load_texture("textures/player/still.png")
 player_run1 = pr.load_texture("textures/player/run1.png")
@@ -26,6 +78,7 @@ bot_texture = pr.load_texture("textures/bot.png")
 block_texture = pr.load_texture("textures/block.png")
 finish_texture = pr.load_texture("textures/fin.png")
 grass_texture = pr.load_texture("textures/grass.png")
+spikes_texture = pr.load_texture("textures/spikes.png")
 bg_texture = pr.load_texture("textures/bg.png")
 
 sign_restart = pr.load_texture("textures/signs/restart.png")
@@ -50,10 +103,13 @@ class Entity(ABC):
     @abstractmethod
     def update(self, dt: float):
         ...
-    
+
 
 grass_edge = 15
 grass_height = 2
+
+spike_edge = 40
+spike_height = 50
 
 class Block(Entity):
     def __init__(self, x: int, y: int, w: int, h: int, flags: list[str] = None):
@@ -62,6 +118,17 @@ class Block(Entity):
         self.w = w
         self.h = h
         self.flags = flags
+
+        if "nograss" in self.flags:
+            return
+        elif "spikes" in self.flags:
+            self.spike_w = int((self.w + spike_edge * 2) / 1.1)
+            if spikes_texture.width <= self.spike_w:
+                self.spike_w = spikes_texture.width
+                self.spike_w = 0
+            else:
+                self.spike_x = random.randint(0, spikes_texture.width - self.spike_w)
+            return
 
         if not "nograss" in self.flags:
             self.grass_w = (self.w + grass_edge * 2) // 3
@@ -88,6 +155,16 @@ class Block(Entity):
                 fast_render(sign_q_green, self.x, self.y, self.w, self.h)
             else:
                 fast_render(sign_q, self.x, self.y, self.w, self.h)
+            return
+        elif "spikes" in self.flags:
+            pr.draw_texture_pro(
+                spikes_texture,
+                pr.Rectangle(self.spike_x, 0, self.spike_w, spikes_texture.height),
+                pr.Rectangle(self.x - spike_edge, self.y - spike_height, self.w + 2 * spike_edge, self.h + spike_height),
+                pr.Vector2(0, 0),
+                0,
+                pr.RAYWHITE
+            )
             return
         
         fast_render(block_texture, self.x, self.y, self.w, self.h)
@@ -141,6 +218,8 @@ class Player(Entity):
         self.jump_strength: float = 1000
         self.walk_speed: float = 600
 
+        self.dead = False
+
         self.y_speed: float = 0
         self.x_speed: float = 0
 
@@ -175,6 +254,7 @@ class Player(Entity):
         self.grounded = False
         self.carried = False
         self.finish = False
+        self.dead = False
 
     def travel(self, level: Level, delta_x: float, delta_y: float, pushed: bool = False):
         x_new = self.x + delta_x
@@ -187,6 +267,8 @@ class Player(Entity):
                 self.finish = True
             elif 'notouch' in obj.flags:
                 continue
+            elif 'spikes' in obj.flags:
+                self.dead = True
             if x_new < obj.x < x_new + self.w > obj.x:
                 x_new = min(x_new, obj.x - self.w)
             if x_new < obj.x + obj.w < x_new + self.w:
@@ -202,6 +284,8 @@ class Player(Entity):
                 self.finish = True
             elif 'notouch' in obj.flags:
                 continue
+            elif 'spikes' in obj.flags:
+                self.dead = True
             if y_new < obj.y < y_new + self.h:
                 self.y_speed = 0
                 y_new = min(y_new, obj.y - self.h)
@@ -416,14 +500,18 @@ def update_camera(dt: float):
     mid_x = (user.x + user.w / 2 + bot.x + bot.w / 2) / 2
     mid_y = (user.y + user.h / 2 + bot.y + bot.h / 2) / 2
 
-    padding = 1000
+    padding = 1_000
+    if game_status == Status.DEAD:
+        padding /= 5
+    elif pr.is_key_down(pr.KeyboardKey.KEY_Z):
+        padding *= 5
     cam_w = abs(user.x - bot.x) + user.w + padding
     cam_h = abs(user.y - bot.y) + user.h + padding
 
     zoom = min(pr.get_screen_width() / cam_w, pr.get_screen_height() / cam_h)
     zoom = max(0.15, min(1, zoom))
 
-    t = 1 - 0.01 ** dt
+    t = 1 - 0.001 ** dt
     cam.target.x += (mid_x - cam.target.x) * t
     cam.target.y += (mid_y - cam.target.y) * t
     cam.zoom += (zoom - cam.zoom) * t
@@ -434,52 +522,85 @@ def reset_camera():
     cam.zoom = 0.5
 
 reset_camera()
-    
+
+class Status(Enum):
+    DEAD = 0
+    PLAYING = 1
+    TRANSITIONING = 2
+    INTRO = 3
+
+game_status = Status.PLAYING
+
+def restart():
+    level_data = level.load(level_id)
+    user.respawn(*level_data['spawn']['user'])
+    bot.respawn(*level_data['spawn']['bot'])
+    rope.reset()
+    rope.cooldown_alpha = rope.cooldown
+    explosion.done = True
+    reset_camera()
+
+explosion = Explosion(0, 0, 250, 250)
 
 while not pr.window_should_close():
     dt = pr.get_frame_time()
 
+    if game_status == Status.PLAYING:
+        if (user.finish or bot.finish):
+            if level_id >= len(os.listdir("levels")):
+                level_id = 1
+            else:
+                level_id += 1
+            level_data = level.load(level_id)
+            user.respawn(*level_data['spawn']['user'])
+            bot.respawn(*level_data['spawn']['bot'])
+            rope.reset()
+            rope.cooldown_alpha = rope.cooldown
+        elif pr.is_key_pressed(pr.KeyboardKey.KEY_R):
+            restart()
+        elif user.dead or bot.dead:
+            game_status = Status.DEAD
+            pr.play_sound(death_sfx)
+            victim = user if user.dead else bot
+            explosion.start(victim.x + victim.w / 2, victim.y + victim.h / 2)
+        
+        else:
+            if pr.is_key_pressed(pr.KeyboardKey.KEY_Q) and user.grounded:
+                rope.use()
+            if not rope.active:
+                update_characters()
+            rope.update(dt)
+
+
+    elif game_status == Status.DEAD:
+        explosion.update(dt)
+        if pr.is_key_pressed(pr.KeyboardKey.KEY_R):
+            restart()
+            game_status = Status.PLAYING
+    
+    update_camera(dt)
+
+
+
     pr.begin_drawing()
     pr.clear_background(pr.RAYWHITE)
 
-    if user.finish or bot.finish:
-        if level_id >= len(os.listdir("levels")):
-            level_id = 1
-        else:
-            level_id += 1
-        level_data = level.load(level_id)
-        user.respawn(*level_data['spawn']['user'])
-        bot.respawn(*level_data['spawn']['bot'])
-        rope.reset()
-        rope.cooldown_alpha = rope.cooldown
-    elif pr.is_key_pressed(pr.KeyboardKey.KEY_R):
-        level_data = level.load(level_id)
-        user.respawn(*level_data['spawn']['user'])
-        bot.respawn(*level_data['spawn']['bot'])
-        rope.reset()
-        rope.cooldown_alpha = rope.cooldown
-        reset_camera()
-    elif pr.is_key_pressed(pr.KeyboardKey.KEY_Q) and user.grounded:
-        rope.use()
-    
     fast_render(bg_texture, 0, 0, pr.get_screen_width(), pr.get_screen_height())
-
-    if not rope.active:
-        update_characters()
-    rope.update(dt)
-
-    update_camera(dt)
-
     pr.begin_mode_2d(cam)
-    if rope.active:
+    if rope.active and game_status == Status.PLAYING:
         rope.draw()
-    user.draw()
-    bot.draw()
+
+    if not user.dead:
+        user.draw()
+    if not bot.dead:
+        bot.draw()
     level.draw()
+    explosion.draw()
     pr.end_mode_2d()
 
+
     pr.draw_fps(10, 10)
-    
+        
     pr.end_drawing()
 
 pr.close_window()
