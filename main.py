@@ -84,15 +84,17 @@ bg_texture = pr.load_texture("textures/bg.png")
 sign_restart = pr.load_texture("textures/signs/restart.png")
 sign_q = pr.load_texture("textures/signs/q.png")
 sign_q_green = pr.load_texture("textures/signs/q_green.png")
+sign_zoom = pr.load_texture("textures/signs/zoom.png")
 
-def fast_render(texture: pr.Texture, x: int, y: int, w: int, h: int):
+def fast_render(texture: pr.Texture, x: int, y: int, w: int, h: int, opacity: float = 1):
+    col = pr.Color(255, 255, 255, int(opacity * 255))
     pr.draw_texture_pro(
         texture,
         pr.Rectangle(0, 0, texture.width, texture.height),
         pr.Rectangle(x, y, w, h),
         pr.Vector2(0, 0),
         0,
-        pr.RAYWHITE
+        col
     )
 
 class Entity(ABC):
@@ -125,7 +127,7 @@ class Block(Entity):
             self.spike_w = int((self.w + spike_edge * 2) / 1.1)
             if spikes_texture.width <= self.spike_w:
                 self.spike_w = spikes_texture.width
-                self.spike_w = 0
+                self.spike_x = 0
             else:
                 self.spike_x = random.randint(0, spikes_texture.width - self.spike_w)
             return
@@ -146,37 +148,41 @@ class Block(Entity):
     def draw(self):
         if "finish" in self.flags:
             fast_render(finish_texture, self.x, self.y, self.w, self.h)
-            return
         elif "signrestart" in self.flags:
             fast_render(sign_restart, self.x, self.y, self.w, self.h)
-            return
         elif "signq" in self.flags:
             if user.grounded:
                 fast_render(sign_q_green, self.x, self.y, self.w, self.h)
             else:
                 fast_render(sign_q, self.x, self.y, self.w, self.h)
-            return
+        elif "signzoom" in self.flags:
+            fast_render(sign_zoom, self.x, self.y, self.w, self.h)
         elif "spikes" in self.flags:
+            rot = self.h > self.w
+            dw = (self.h if rot else self.w) + 2 * spike_edge
+            dh = (self.w if rot else self.h) + 2 * spike_height
+            cx = self.x + self.w / 2 + (spike_height / 2 if rot else 0)
+            cy = self.y + self.h / 2 - (0 if rot else spike_height / 2)
             pr.draw_texture_pro(
                 spikes_texture,
                 pr.Rectangle(self.spike_x, 0, self.spike_w, spikes_texture.height),
-                pr.Rectangle(self.x - spike_edge, self.y - spike_height, self.w + 2 * spike_edge, self.h + spike_height),
-                pr.Vector2(0, 0),
-                0,
+                pr.Rectangle(cx, cy, dw, dh),
+                pr.Vector2(dw / 2, dh / 2),
+                90 if rot else 0,
                 pr.RAYWHITE
             )
-            return
-        
-        fast_render(block_texture, self.x, self.y, self.w, self.h)
-        if not "nograss" in self.flags:
-            pr.draw_texture_pro(
-                grass_texture,
-                pr.Rectangle(self.grass_x, 0, self.grass_w, grass_texture.height),
-                pr.Rectangle(self.x - grass_edge, self.y - grass_height, self.w + 2 * grass_edge, self.h // 1.6),
-                pr.Vector2(0, 0),
-                0,
-                pr.RAYWHITE
-            )
+        else:
+            opacity = 0.4 if "bg" in self.flags else 1
+            fast_render(block_texture, self.x, self.y, self.w, self.h, opacity)
+            if not "nograss" in self.flags:
+                pr.draw_texture_pro(
+                    grass_texture,
+                    pr.Rectangle(self.grass_x, 0, self.grass_w, grass_texture.height),
+                    pr.Rectangle(self.x - grass_edge, self.y - grass_height, self.w + 2 * grass_edge, self.h // 1.6),
+                    pr.Vector2(0, 0),
+                    0,
+                    pr.Color(255, 255, 255, int(opacity*255))
+                )
 
 
 class Level(Entity):
@@ -399,7 +405,7 @@ class Rope:
         self.active = False
 
         self.dur_alpha = 0
-        self.dur = 2
+        self.dur = 3
 
         self.cooldown = 0.3
         self.cooldown_alpha: float = 0
@@ -436,6 +442,7 @@ class Rope:
 
             if dist < 5 or (self.travel_x == 0 and self.travel_y == 0):
                 self.reset()
+                bot.y_speed = 0
                 return
 
             if dist > 0:
