@@ -204,9 +204,12 @@ class Level(Entity):
 
         return level_data
 
-    def draw(self):
+    def draw(self, bg: bool = False):
         for obj in self.layout:
-            obj.draw()
+            if "bg" in obj.flags and bg:
+                obj.draw()
+            elif not "bg" in obj.flags and not bg:
+                obj.draw()
 
 
 class Player(Entity):
@@ -594,13 +597,13 @@ while not pr.window_should_close():
 
     fast_render(bg_texture, 0, 0, pr.get_screen_width(), pr.get_screen_height())
     pr.begin_mode_2d(cam)
+
+    level.draw(bg=True)
     if rope.active and game_status == Status.PLAYING:
         rope.draw()
 
-    if not user.dead:
-        user.draw()
-    if not bot.dead:
-        bot.draw()
+    if not user.dead: user.draw()
+    if not bot.dead: bot.draw()
     level.draw()
     explosion.draw()
     pr.end_mode_2d()
