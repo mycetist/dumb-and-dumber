@@ -1,0 +1,7 @@
+*.wav
+.DS_Store
+*.gguf
+__pycache__
+voice/model
+voice/__init__.py
+voice/recorder.py

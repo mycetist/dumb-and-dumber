@@ -7,8 +7,12 @@ import json
 import os
 
 import random
+from concurrent.futures import ThreadPoolExecutor
+from voice.final_pipeline import run_pipeline, get_whisper, get_llm_instance, LLM_PATH
+from voice.recorder import Recorder, SAMPLE_RATE
 random.seed(0)
 
+from voice.LLM import close_llm
 
 pr.set_config_flags(pr.ConfigFlags.FLAG_WINDOW_RESIZABLE)
 pr.init_window(1500, 1000, "demo")
@@ -85,6 +89,8 @@ sign_restart = pr.load_texture("textures/signs/restart.png")
 sign_q = pr.load_texture("textures/signs/q.png")
 sign_q_green = pr.load_texture("textures/signs/q_green.png")
 sign_zoom = pr.load_texture("textures/signs/zoom.png")
+
+mic_texture = pr.load_texture("textures/mic.png")
 
 def fast_render(texture: pr.Texture, x: int, y: int, w: int, h: int, opacity: float = 1):
     col = pr.Color(255, 255, 255, int(opacity * 255))
@@ -380,14 +386,52 @@ class User(Player):
 class Bot(Player):
     def __init__(self):
         super().__init__()
+        self.executing = False
+        self.timer = 0
+        self.instruction: list = []
 
-    def update(self, dt: float, level: Level):
+    def _update_manual(self, dt: float, level: Level):
         key_left = pr.is_key_down(pr.KeyboardKey.KEY_LEFT)
         key_right = pr.is_key_down(pr.KeyboardKey.KEY_RIGHT)
         key_up = pr.is_key_pressed(pr.KeyboardKey.KEY_UP)
         keys = {'right': key_right, 'left': key_left, 'up': key_up}
         self._animate(dt)
         return self._move(dt, level, keys)
+
+    def update(self, dt: float, level: Level):
+        keys = {'right': False, 'left': False, 'up': False}
+        def _add_action(action: str):
+            if action.lower() == "jump":
+                keys['up'] = True
+            else:
+                keys[action.lower()] = True
+        
+        if self.executing and self.timer > max(cmd['duration'][1] for cmd in self.instruction):
+            self.executing = False
+            self.timer = 0
+        
+        if self.executing:
+            self.timer += dt
+            for i in range(len(self.instruction)):
+                cmd = self.instruction[i]
+                if self.timer > cmd['duration'][0] and \
+                        (self.timer <= cmd['duration'][1] or not cmd.get('ran', False)):
+                    _add_action(cmd['type'])
+                    self.instruction[i]['ran'] = True
+
+        self._animate(dt)
+        return self._move(dt, level, keys)
+            
+
+    def execute(self, instruction: list):
+        self.instruction = instruction
+        self.executing = True
+        self.timer = 0
+
+    def respawn(self, x: int, y: int):
+        super().respawn(x, y)
+        self.executing = False
+        self.timer = 0
 
     def draw(self):
         if not self.grounded:
@@ -552,8 +596,34 @@ def restart():
 
 explosion = Explosion(0, 0, 250, 250)
 
+voice_pool = ThreadPoolExecutor(max_workers=1)
+voice_job = None
+recorder = Recorder()
+
+def warm_up():
+    get_whisper()
+    get_llm_instance(LLM_PATH)
+
+voice_pool.submit(warm_up)
+
 while not pr.window_should_close():
     dt = pr.get_frame_time()
+
+    if pr.is_key_pressed(pr.KeyboardKey.KEY_SPACE) and voice_job is None:
+        recorder.start()
+    elif pr.is_key_released(pr.KeyboardKey.KEY_SPACE) and recorder.stream is not None:
+        audio = recorder.stop()
+        if len(audio) > 0.3 * SAMPLE_RATE:
+            voice_job = voice_pool.submit(run_pipeline, audio)
+
+    if voice_job is not None and voice_job.done():
+        try:
+            result, took = voice_job.result()
+            print(result)
+            bot.execute(result['commands'])
+        except Exception as e:
+            print(f"pipeline fail: {e}")
+        voice_job = None
 
     if game_status == Status.PLAYING:
         if (user.finish or bot.finish):
@@ -608,9 +678,23 @@ while not pr.window_should_close():
     explosion.draw()
     pr.end_mode_2d()
 
+    if recorder.stream is not None:
+        mic_w = mic_texture.width * 2
+        mic_h = mic_texture.height * 2
+        fast_render(
+            mic_texture,
+            pr.get_screen_width() / 2 - mic_w,
+            pr.get_screen_height() / 2 - mic_h,
+            mic_w,
+            mic_h
+        )
+
 
     pr.draw_fps(10, 10)
         
     pr.end_drawing()
 
 pr.close_window()
+
+voice_pool.shutdown(wait=True, cancel_futures=True)
+close_llm()
