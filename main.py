@@ -9,6 +9,7 @@ random.seed(0)
 
 import os
 
+pr.set_config_flags(pr.ConfigFlags.FLAG_WINDOW_RESIZABLE)
 pr.init_window(1500, 1000, "demo")
 pr.set_target_fps(60)
 
@@ -28,6 +29,8 @@ grass_texture = pr.load_texture("textures/grass.png")
 bg_texture = pr.load_texture("textures/bg.png")
 
 sign_restart = pr.load_texture("textures/signs/restart.png")
+sign_q = pr.load_texture("textures/signs/q.png")
+sign_q_green = pr.load_texture("textures/signs/q_green.png")
 
 def fast_render(texture: pr.Texture, x: int, y: int, w: int, h: int):
     pr.draw_texture_pro(
@@ -79,6 +82,12 @@ class Block(Entity):
             return
         elif "signrestart" in self.flags:
             fast_render(sign_restart, self.x, self.y, self.w, self.h)
+            return
+        elif "signq" in self.flags:
+            if user.grounded:
+                fast_render(sign_q_green, self.x, self.y, self.w, self.h)
+            else:
+                fast_render(sign_q, self.x, self.y, self.w, self.h)
             return
         
         fast_render(block_texture, self.x, self.y, self.w, self.h)
@@ -333,6 +342,7 @@ class Rope:
         if self.active:
             self.dur_alpha += dt
             if self.dur_alpha >= self.dur:
+                bot.y_speed = 0
                 self.reset()
                 return
 
@@ -366,7 +376,7 @@ class Rope:
         pr.draw_line_ex(
             pr.Vector2(user.x + user.w // 2, user.y + user.h // 2),
             pr.Vector2(bot.x + bot.w // 2, bot.y + bot.h // 2),
-            10, pr.Color(255, 255, 255, 100)
+            7, pr.Color(255, 255, 255, 100)
         )
 
 
