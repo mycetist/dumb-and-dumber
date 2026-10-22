@@ -6,13 +6,18 @@ from enum import Enum
 import json
 import os
 
+VOICE = True
+
 import random
 from concurrent.futures import ThreadPoolExecutor
-from voice.final_pipeline import run_pipeline, get_whisper, get_llm_instance, LLM_PATH
-from voice.recorder import Recorder, SAMPLE_RATE
+if VOICE:
+    from voice.final_pipeline import run_pipeline, get_whisper, get_llm_instance, LLM_PATH
+    from voice.recorder import Recorder, SAMPLE_RATE
+    from voice.LLM import close_llm
+
 random.seed(0)
 
-from voice.LLM import close_llm
+
 
 pr.set_config_flags(pr.ConfigFlags.FLAG_WINDOW_RESIZABLE)
 pr.init_window(1500, 1000, "demo")
@@ -89,6 +94,7 @@ sign_restart = pr.load_texture("textures/signs/restart.png")
 sign_q = pr.load_texture("textures/signs/q.png")
 sign_q_green = pr.load_texture("textures/signs/q_green.png")
 sign_zoom = pr.load_texture("textures/signs/zoom.png")
+sign_gg = pr.load_texture("textures/signs/gg.png")
 
 mic_texture = pr.load_texture("textures/mic.png")
 
@@ -130,7 +136,7 @@ class Block(Entity):
         if "nograss" in self.flags:
             return
         elif "spikes" in self.flags:
-            self.spike_w = int((self.w + spike_edge * 2) / 1.1)
+            self.spike_w = int((max(self.w, self.h) + spike_edge * 2) / 1.1)
             if spikes_texture.width <= self.spike_w:
                 self.spike_w = spikes_texture.width
                 self.spike_x = 0
@@ -163,12 +169,17 @@ class Block(Entity):
                 fast_render(sign_q, self.x, self.y, self.w, self.h)
         elif "signzoom" in self.flags:
             fast_render(sign_zoom, self.x, self.y, self.w, self.h)
+        elif "signgg" in self.flags:
+            fast_render(sign_gg, self.x, self.y, self.w, self.h)
         elif "spikes" in self.flags:
             rot = self.h > self.w
-            dw = (self.h if rot else self.w) + 2 * spike_edge
-            dh = (self.w if rot else self.h) + 2 * spike_height
-            cx = self.x + self.w / 2 + (spike_height / 2 if rot else 0)
-            cy = self.y + self.h / 2 - (0 if rot else spike_height / 2)
+            se = spike_edge if not rot else spike_height
+            sh = spike_height if not rot else spike_edge
+            
+            dw = (self.h if rot else self.w) + 2 * se
+            dh = (self.w if rot else self.h) + 2 * sh
+            cx = self.x + self.w / 2 + (sh / 2 if rot else 0)
+            cy = self.y + self.h / 2 - (0 if rot else sh / 2)
             pr.draw_texture_pro(
                 spikes_texture,
                 pr.Rectangle(self.spike_x, 0, self.spike_w, spikes_texture.height),
@@ -399,6 +410,8 @@ class Bot(Player):
         return self._move(dt, level, keys)
 
     def update(self, dt: float, level: Level):
+        if not VOICE:
+            return self._update_manual(dt, level)
         keys = {'right': False, 'left': False, 'up': False}
         def _add_action(action: str):
             if action.lower() == "jump":
@@ -596,34 +609,37 @@ def restart():
 
 explosion = Explosion(0, 0, 250, 250)
 
-voice_pool = ThreadPoolExecutor(max_workers=1)
 voice_job = None
-recorder = Recorder()
 
-def warm_up():
-    get_whisper()
-    get_llm_instance(LLM_PATH)
+if VOICE:
+    voice_pool = ThreadPoolExecutor(max_workers=1)
+    recorder = Recorder()
 
-voice_pool.submit(warm_up)
+    def warm_up():
+        get_whisper()
+        get_llm_instance(LLM_PATH)
+
+    voice_pool.submit(warm_up)
 
 while not pr.window_should_close():
     dt = pr.get_frame_time()
 
-    if pr.is_key_pressed(pr.KeyboardKey.KEY_SPACE) and voice_job is None:
-        recorder.start()
-    elif pr.is_key_released(pr.KeyboardKey.KEY_SPACE) and recorder.stream is not None:
-        audio = recorder.stop()
-        if len(audio) > 0.3 * SAMPLE_RATE:
-            voice_job = voice_pool.submit(run_pipeline, audio)
+    if VOICE:
+        if pr.is_key_pressed(pr.KeyboardKey.KEY_SPACE) and voice_job is None:
+            recorder.start()
+        elif pr.is_key_released(pr.KeyboardKey.KEY_SPACE) and recorder.stream is not None:
+            audio = recorder.stop()
+            if len(audio) > 0.3 * SAMPLE_RATE:
+                voice_job = voice_pool.submit(run_pipeline, audio)
 
-    if voice_job is not None and voice_job.done():
-        try:
-            result, took = voice_job.result()
-            print(result)
-            bot.execute(result['commands'])
-        except Exception as e:
-            print(f"pipeline fail: {e}")
-        voice_job = None
+        if voice_job is not None and voice_job.done():
+            try:
+                result, took = voice_job.result()
+                print(result)
+                bot.execute(result['commands'])
+            except Exception as e:
+                print(f"pipeline fail: {e}")
+            voice_job = None
 
     if game_status == Status.PLAYING:
         if (user.finish or bot.finish):
@@ -678,13 +694,13 @@ while not pr.window_should_close():
     explosion.draw()
     pr.end_mode_2d()
 
-    if recorder.stream is not None:
-        mic_w = mic_texture.width * 2
-        mic_h = mic_texture.height * 2
+    if VOICE and recorder.stream is not None:
+        mic_w = mic_texture.width * 3
+        mic_h = mic_texture.height * 3
         fast_render(
             mic_texture,
-            pr.get_screen_width() / 2 - mic_w,
-            pr.get_screen_height() / 2 - mic_h,
+            pr.get_screen_width() / 2 - mic_w / 2,
+            pr.get_screen_height() / 2 - mic_h / 2,
             mic_w,
             mic_h
         )
