@@ -437,6 +437,20 @@ class Bot(Player):
             
 
     def execute(self, instruction: list):
+        def _valid(instruction) -> bool:
+            try:
+                if len(instruction) == 0:
+                    return False
+                for cmd in instruction:
+                    if not ('duration' in cmd and 'type' in cmd):
+                        return False
+            except Exception as e:
+                return False
+            return True
+
+        if not _valid(instruction):
+            return
+            
         self.instruction = instruction
         self.executing = True
         self.timer = 0
